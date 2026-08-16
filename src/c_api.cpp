@@ -87,23 +87,33 @@ bool gudcam_acquire_processed_frame(void* ctx_ptr,
                                      double* out_latency_ms,
                                      double* out_render_fps,
                                      uint64_t* out_drops,
-                                     double* out_focus_score) {
+                                     double* out_focus_score,
+                                     bool hardware_acceleration) {
     if (!ctx_ptr) return false;
     GudCamContext* ctx = static_cast<GudCamContext*>(ctx_ptr);
 
     gudcam::FramePayload* frame = nullptr;
     bool has_new = ctx->triple_buffer.acquire_consumer_frame(&frame);
     
-    // We cannot perform AFMF frame generation on the main CPU thread if it takes 60ms per frame.
-    // Revert to only processing hardware frames to prevent UI thread locking.
     if (frame && frame->data_size > 0 && has_new) {
-        uint32_t sr_w = 0, sr_h = 0;
-        ctx->gpu_pipeline.process_frame(frame, ctx->processed_frame_buf, sr_w, sr_h, 
-                                       static_cast<gudcam::ScalingMode>(sr_mode));
+        uint32_t sr_w = frame->width;
+        uint32_t sr_h = frame->height;
+        
+        if (!hardware_acceleration) {
+            ctx->gpu_pipeline.process_frame(frame, ctx->processed_frame_buf, sr_w, sr_h, 
+                                           static_cast<gudcam::ScalingMode>(sr_mode));
 
-        size_t required = sr_w * sr_h * 4;
-        if (out_buffer && buffer_capacity >= required) {
-            std::memcpy(out_buffer, ctx->processed_frame_buf.data(), required);
+            size_t required = sr_w * sr_h * 4;
+            if (out_buffer && buffer_capacity >= required) {
+                std::memcpy(out_buffer, ctx->processed_frame_buf.data(), required);
+            }
+        } else {
+            // Hardware compute shader mode: bypass CPU scaling completely.
+            // Just copy the raw base-resolution RGBA payload directly.
+            size_t required = frame->data_size;
+            if (out_buffer && buffer_capacity >= required) {
+                std::memcpy(out_buffer, frame->buffer.data(), required);
+            }
         }
 
         if (out_w) *out_w = sr_w;

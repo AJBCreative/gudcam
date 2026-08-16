@@ -3,7 +3,23 @@ import os
 import ctypes
 import numpy as np
 import time
-import OpenGL.GL as gl
+from OpenGL import GL as gl
+from gudcam.shaders import compile_compute_shader, COMPUTE_SHADER_BILINEAR, COMPUTE_SHADER_FSR4
+
+# Bypass PyOpenGL extension loading bugs by dynamically resolving GL 4.3 functions via GLX
+glx = ctypes.CDLL('libGL.so.1')
+glx.glXGetProcAddress.restype = ctypes.c_void_p
+glx.glXGetProcAddress.argtypes = [ctypes.c_char_p]
+
+_glBindImageTexture = ctypes.CFUNCTYPE(None, ctypes.c_uint, ctypes.c_uint, ctypes.c_int, ctypes.c_bool, ctypes.c_int, ctypes.c_uint, ctypes.c_uint)(
+    glx.glXGetProcAddress(b"glBindImageTexture")
+)
+_glDispatchCompute = ctypes.CFUNCTYPE(None, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint)(
+    glx.glXGetProcAddress(b"glDispatchCompute")
+)
+_glMemoryBarrier = ctypes.CFUNCTYPE(None, ctypes.c_uint)(
+    glx.glXGetProcAddress(b"glMemoryBarrier")
+)
 
 from imgui_bundle import imgui, hello_imgui, immapp
 from gudcam.controls import ControlManager
@@ -41,10 +57,54 @@ class GudCamHUD:
         # Initial control discovery
         self.controls = self.controls_mgr.refresh()
 
-    def update_texture(self, width, height, data_ptr):
-        if width <= 0 or height <= 0 or not data_ptr:
+        # Compute Shaders
+        self.compute_prog_bilinear = None
+        self.compute_prog_fsr4 = None
+        self.input_texture_id = None
+        self.input_texture_w = 0
+        self.input_texture_h = 0
+        self.hw_accel = True
+
+    def update_texture(self, in_w, in_h, data_ptr):
+        if in_w <= 0 or in_h <= 0 or not data_ptr:
             return
 
+        # 1. Compile shaders on first run (Requires active GL context)
+        if self.compute_prog_bilinear is None:
+            self.compute_prog_bilinear = compile_compute_shader(COMPUTE_SHADER_BILINEAR)
+            self.compute_prog_fsr4 = compile_compute_shader(COMPUTE_SHADER_FSR4)
+
+        # 2. Determine output size based on sr_mode scaling
+        scale = 1
+        if self.sr_mode == 1: scale = 2
+        elif self.sr_mode == 2: scale = 4
+        elif self.sr_mode == 3: scale = 2
+        elif self.sr_mode == 4: scale = 4
+        elif self.sr_mode == 5: scale = 2
+        elif self.sr_mode == 6: scale = 4
+        out_w, out_h = in_w * scale, in_h * scale
+
+        # 3. Setup Input Texture (Base Resolution)
+        if self.input_texture_id is None:
+            self.input_texture_id = gl.glGenTextures(1)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self.input_texture_id)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self.input_texture_id)
+        c_ptr = ctypes.c_void_p(data_ptr)
+
+        if self.input_texture_w != in_w or self.input_texture_h != in_h:
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, in_w, in_h, 0, gl.GL_BGRA, gl.GL_UNSIGNED_BYTE, c_ptr)
+            self.input_texture_w = in_w
+            self.input_texture_h = in_h
+        else:
+            gl.glTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, in_w, in_h, gl.GL_BGRA, gl.GL_UNSIGNED_BYTE, c_ptr)
+
+        # 4. Setup Output Texture (High Resolution)
         if self.texture_id is None:
             self.texture_id = gl.glGenTextures(1)
             gl.glBindTexture(gl.GL_TEXTURE_2D, self.texture_id)
@@ -53,23 +113,33 @@ class GudCamHUD:
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, filter_type)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
-            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
 
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.texture_id)
-        c_ptr = ctypes.c_void_p(data_ptr)
+        if self.texture_w != out_w or self.texture_h != out_h:
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, out_w, out_h, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+            self.texture_w = out_w
+            self.texture_h = out_h
 
-        filter_type = gl.GL_NEAREST if self.sr_mode >= 4 else gl.GL_LINEAR
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, filter_type)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, filter_type)
-
-        if self.texture_w != width or self.texture_h != height:
-            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0, gl.GL_BGRA, gl.GL_UNSIGNED_BYTE, c_ptr)
-            self.texture_w = width
-            self.texture_h = height
-        else:
-            gl.glTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, width, height, gl.GL_BGRA, gl.GL_UNSIGNED_BYTE, c_ptr)
+        # 5. Dispatch Compute Shader
+        prog = self.compute_prog_fsr4 if self.sr_mode >= 4 else self.compute_prog_bilinear
+        if prog:
+            gl.glUseProgram(prog)
+            
+            # Bind images
+            _glBindImageTexture(0, self.input_texture_id, 0, False, 0, gl.GL_READ_ONLY, gl.GL_RGBA8)
+            _glBindImageTexture(1, self.texture_id, 0, False, 0, gl.GL_WRITE_ONLY, gl.GL_RGBA8)
+            
+            # Uniforms
+            gl.glUniform1f(gl.glGetUniformLocation(prog, "zoom_factor"), self.zoom_factor)
+            gl.glUniform1f(gl.glGetUniformLocation(prog, "pan_x"), self.pan_x)
+            gl.glUniform1f(gl.glGetUniformLocation(prog, "pan_y"), self.pan_y)
+            
+            # Dispatch (16x16 work groups)
+            _glDispatchCompute((out_w + 15) // 16, (out_h + 15) // 16, 1)
+            _glMemoryBarrier(gl.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
 
     def render_hud(self):
+        
         # Force 120 FPS continuous rendering (bypasses any backend sleep overrides)
         params = hello_imgui.get_runner_params()
         params.fps_idling.enable_idling = False
@@ -107,7 +177,7 @@ class GudCamHUD:
 
         t_pre_acq = time.time()
         # Acquire frame from C++ engine
-        has_new = self.engine.acquire_frame(self.frame_buffer, sr_mode=self.sr_mode)
+        has_new = self.engine.acquire_frame(self.frame_buffer, sr_mode=self.sr_mode, hw_accel=self.hw_accel)
         t_post_acq = time.time()
         
         if has_new and self.engine.last_width > 0 and self.engine.last_height > 0:
@@ -259,6 +329,10 @@ class GudCamHUD:
         hdr_changed, hdr_val = imgui.checkbox("HDR Via / Shadow Boost", self.hdr_boost)
         if hdr_changed:
             self.hdr_boost = hdr_val
+
+        changed, self.hw_accel = imgui.checkbox("Hardware GPU Acceleration (Compute Shaders)", self.hw_accel)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Offload super-resolution math to the GPU via OpenGL Compute Shaders")
 
         ret_changed, new_ret = imgui.combo("Optical Reticle Overlay", self.reticle_mode, ["None", "Target Crosshair", "Microscope Pitch Grid"])
         if ret_changed:

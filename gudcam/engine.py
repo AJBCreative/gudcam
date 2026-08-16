@@ -61,7 +61,8 @@ class GudCamEngine:
             ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_uint64),
-            ctypes.POINTER(ctypes.c_double)
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.c_bool
         ]
         self._lib.gudcam_acquire_processed_frame.restype = ctypes.c_bool
 
@@ -110,7 +111,7 @@ class GudCamEngine:
     def configure_render_thread(self, core2=2, priority50=50):
         return self._lib.gudcam_configure_render_thread(core2, priority50)
 
-    def acquire_frame(self, target_buf, sr_mode=2): # sr_mode 2 = ESPCN_x2
+    def acquire_frame(self, target_buf, sr_mode=0, hw_accel=True):
         out_w = ctypes.c_uint32(0)
         out_h = ctypes.c_uint32(0)
         out_seq = ctypes.c_uint64(0)
@@ -131,7 +132,8 @@ class GudCamEngine:
             ctypes.byref(out_lat),
             ctypes.byref(out_fps),
             ctypes.byref(out_drops),
-            ctypes.byref(out_focus)
+            ctypes.byref(out_focus),
+            hw_accel
         )
 
         self.last_width = out_w.value
