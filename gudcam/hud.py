@@ -97,12 +97,14 @@ class GudCamHUD:
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.input_texture_id)
         c_ptr = ctypes.c_void_p(data_ptr)
 
+        upload_format = gl.GL_RGBA if self.hw_accel else gl.GL_BGRA
+
         if self.input_texture_w != in_w or self.input_texture_h != in_h:
-            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, in_w, in_h, 0, gl.GL_BGRA, gl.GL_UNSIGNED_BYTE, c_ptr)
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, in_w, in_h, 0, upload_format, gl.GL_UNSIGNED_BYTE, c_ptr)
             self.input_texture_w = in_w
             self.input_texture_h = in_h
         else:
-            gl.glTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, in_w, in_h, gl.GL_BGRA, gl.GL_UNSIGNED_BYTE, c_ptr)
+            gl.glTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, in_w, in_h, upload_format, gl.GL_UNSIGNED_BYTE, c_ptr)
 
         # 4. Setup Output Texture (High Resolution)
         if self.texture_id is None:
