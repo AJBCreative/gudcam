@@ -11,7 +11,7 @@ GudCam is a hyper-optimized, real-time Linux camera inspection engine designed f
 ## What It Is NOT Meant To Do
 - **Photography/Video Recording**: GudCam is purely a live viewing engine. It does not currently record video or take snapshots.
 - **Cross-Platform Compatibility**: This is tightly coupled to Linux and the `v4l2` (Video4Linux2) subsystem. It will not work on Windows or macOS natively.
-- **GPU Compute Processing (Yet)**: *Note on AMD GPUs:* Currently, the complex Super-Resolution and Frame Generation math (like FSR 4) is highly optimized to run on your host CPU via OpenMP multi-threading. It is not currently using hardware-accelerated GPU GLSL compute shaders.
+
 
 ## Can I run this with an AMD 9000 Series GPU?
 **Yes, and it is fully hardware accelerated!** The pipeline features native **OpenGL 4.3 GLSL Compute Shaders**, allowing it to completely bypass your CPU. The `v4l2` engine instantly passes the 640x480 raw feed directly into your GPU's VRAM, where thousands of GPU micro-threads execute the Edge-Adaptive Spatial Upsampling (FSR 4) math in `<1ms`. If you are running an older laptop or a system without OpenGL 4.3 support, you can toggle the "Hardware GPU Acceleration" checkbox off in the UI, and GudCam will instantly fall back to its ultra-fast C++ OpenMP CPU-bound pipeline.
