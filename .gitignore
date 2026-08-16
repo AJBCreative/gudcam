@@ -1,0 +1,7 @@
+*.so
+*.o
+gudcam_app
+__pycache__/
+tests/test_lockfree
+tests/test_v4l2
+tests/benchmark_latency
